@@ -1,0 +1,360 @@
+---
+title: "Caso Pŕactico Titanic"
+output:
+  html_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+Tomaremos el dataset Salaries.csv
+
+El conjunto de datos consiste en los salarios de nueve meses recogidos de 397 profesores universitarios en los EE.UU. durante 2008 y 2009. Además de los salarios, también se recogió el rango del profesor, el sexo, la disciplina, los años desde el doctorado y los años de servicio. Así, hay un total de 6 variables, que se describen a continuación.
+
+      1. rank: Categórica - de profesor asistente, profesor asociado o catedrático
+      2. discipline: Categórica - Tipo de departamento en el que trabaja el profesor, ya sea aplicado (B) o teórico (A)
+      3. yrs.since.phd: Continuo - Número de años desde que el profesor obtuvo su doctorado
+      4. yrs.service: Continuo - Número de años que el profesor ha prestado servicio al departamento y/o a la universidad
+      5. sex: Categórico - Sexo del profesor, hombre o mujer
+      6. salary: Continuo - Sueldo de nueve meses del profesor (USD)
+
+El objetivo de esta práctica consiste en realizar un estudio íntegro del dataset para terminar implementando un modelo lineal regularizado que realice predicciones sobre el salario a percibir de un profesor. Asimismo, se pedirá aprovechar la explicabilidad de estos modelos y los estudios estadísticos realizados para arrojar intuiciones y dependencias en los datos.
+
+Para ello, se pide al estudiante que realice los siguientes pasos:
+
+1. Carga los datos. Realiza una inspección por variables de la distribución de salarios en función de cada atributo visualmente. Realiza las observaciones pertinentes. ¿Qué variables son mejores para separar los datos?
+
+```{r}
+library(glmnet)
+library(caret)
+library(ggplot2)
+library(e1071)
+data <- read.csv("Salaries.csv")
+head(data)
+```
+```{r}
+str(data)
+```
+```{r}
+data$sex <- replace(data$sex, data$sex == "Male", 0)
+data$sex <- replace(data$sex, data$sex == "Female", 1)
+data$sex <- as.factor(data$sex)
+```
+
+```{r}
+str(data)
+```
+```{r}
+summary(data)
+```
+```{r}
+data$rank <- as.factor(data$rank)
+data$discipline <- as.factor(data$discipline)
+summary(data)
+```
+
+```{r}
+str(data)
+```
+```{r}
+# Define custom color palette
+cool_colors <- c("#3366CC", "#66CCFF", "#99CCFF", "#6699CC")
+
+# Bar plot: Discipline vs Salary
+ggplot(data, aes(x = discipline, y = salary, fill = discipline)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Discipline", y = "Salary") +
+  scale_fill_manual(values = cool_colors)
+
+# Bar plot: Sex vs Salary
+ggplot(data, aes(x = sex, y = salary, fill = sex)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Sex", y = "Salary") +
+  scale_fill_manual(values = cool_colors, labels = c("Male", "Female"))
+
+# Scatter plot: Years Since PhD vs Salary
+ggplot(data, aes(x = yrs.since.phd, y = salary)) +
+  geom_point() +
+  labs(x = "Years Since PhD", y = "Salary") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank()) +
+  scale_color_manual(values = cool_colors)
+
+# Scatter plot: Years of Service vs Salary
+ggplot(data, aes(x = yrs.service, y = salary)) +
+  geom_point() +
+  labs(x = "Years of Service", y = "Salary") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank()) +
+  scale_color_manual(values = cool_colors)
+
+ggplot(data, aes(x = rank, y = salary, fill = rank)) +
+  geom_violin() +
+  labs(x = "Rank", y = "Salary") +
+  scale_fill_manual(values = cool_colors)
+```
+# Discipline:
+
+La media de salarios de los profesores en Disciplina B será más alto pero por no conocer como se contruyó la muestra no podemos extraer más conclusiones solamente con esa gráfica de barras.
+
+# Yrs.since.Phd/Yrs of Service:
+
+Se ve que el scatterplot de Yrs.since.Phd una tendencia lineal general, pero en el de Yrs of service no se ve tan claramente y será más sesgado por los outliers de profesores ganando más de 175 mil con menos años de tenure. Para esta variable habrá que estudiar su nivel de importancia estadistico porque puede ser que al transferir de otra institucion el salaro emepezará más alto.
+
+# Rank:
+
+El diagrama de violin para los distintos levels (Profesor Asistente, Profesor Asociado y Profesor) muestran variaciones en el salario según el rank. Esto indica que existen diferencias salariales en función del rank académico de los profesores.
+
+# Sex:
+
+El diagrama de barras para profesores y profesoras muestran diferencias significativas en los salarios. Esto sugiere que puede haber disparidades salariales basadas en el género pero hay que tomar en cuenta que en el dataset la muestra de "Female" es bastante más pequeña y limitada.
+
+```{r}
+gender_count <- table(data$sex)
+male_count <- gender_count[1]
+female_count <- gender_count[2]
+
+cat("Male count:", male_count, "\n")
+cat("Female count:", female_count, "\n")
+```
+
+2. ¿Podemos emplear un test paramétrico para determinar si las medias de salarios entre hombres y mujeres son las mismas o difieren? Ten en cuenta que, en tanto que se pide usar un test paramétrico, se deberá determinar si las muestras cumplen con las hipótesis necesarias.
+
+# En este caso, una prueba paramétrica adecuada para comparar las medias de dos grupos independientes (profesores y profesoras) es la prueba t de dos muestras. Sin embargo, antes de realizar la prueba t, debemos asegurarnos de que se cumplan los supuestos de la prueba. Aquí están las hipótesis y suposiciones necesarias para la prueba t:
+
+# Hipótesis:
+
+Hipótesis nula (H0): Los salarios medios de los profesores y profesoras son iguales.
+Hipótesis alternativa (HA): Los salarios medios de los profesores y profesoras son diferentes.
+
+# Suposiciones:
+
+Independencia: Los salarios de los profesores y profesoras son independientes entre sí.
+Normalidad: Los salarios dentro de cada grupo (masculino y femenino) se distribuyen normalmente.
+Igualdad de varianzas: Las varianzas de los salarios en los dos grupos son iguales.
+
+# Para determinar si se cumplen estos supuestos, puede realizar los siguientes pasos:
+
+# 1:
+
+Si los datos se recolectaron aleatoriamente y no hay razón para sospechar dependencia, es probable que se cumpla esta suposición.
+
+# 2
+
+```{r}
+hist(data$salary[data$sex == 0], main = "Salary Distribution - Male Professors")
+plot(density(data$salary[data$sex == 0]), main = "Salary Distribution - Male Professors")
+```
+
+```{r}
+hist(data$salary[data$sex == 1], main = "Salary Distribution - Female Professors")
+plot(density(data$salary[data$sex == 1]), main = "Salary Distribution - Female Professors")
+```
+
+```{r}
+# Q-Q plot - male professors
+qqnorm(data$salary[data$sex == 0])
+qqline(data$salary[data$sex == 0], col = "blue")
+
+# Q-Q plot - female professors
+qqnorm(data$salary[data$sex == 1])
+qqline(data$salary[data$sex == 1], col = "red")
+
+```
+
+```{r}
+# Shapiro-Wilk test - male professors
+shapiro.test(data$salary[data$sex == 0])
+
+# Shapiro-Wilk test - female professors
+shapiro.test(data$salary[data$sex == 1])
+```
+
+# la inspección visual de las distribuciones salariales para profesores y profesoras confirma la desviación de la normalidad y los resultados de la prueba de Shapiro-Wilk se alinean con la evaluación visual -> prueba no paramétrica para comparar los salarios medios entre hombres y mujeres.
+
+# Una prueba no paramétrica de uso común para muestras independientes es la prueba U de Mann-Whitney: evalúa si existe una diferencia significativa en las distribuciones de dos grupos independientes.
+
+```{r}
+result <- wilcox.test(salary ~ sex, data = data)
+print(result)
+```
+# Interpretación: Según la prueba U de Mann-Whitney, el valor p de 0,008237 indica que existe una fuerte evidencia para rechazar la hipótesis nula. Por lo tanto, se puede concluir que existe una diferencia estadísticamente significativa en los salarios medios entre hombres y mujeres.
+
+3. Divide el dataset tomando las primeras 317 instancias como train y las últimas 80 como test. Entrena un modelo de regresión lineal con regularización Ridge y Lasso en train seleccionando el que mejor **MSE** tenga. Da las métricas en test. Valora el uso del One Hot Encoder, en caso de emplearlo arguméntalo.
+
+```{r}
+train <- data[1:317, ]
+test <- data[318:nrow(data), ]
+```
+
+```{r}
+dim(train)
+dim(test)
+```
+
+```{r}
+X_train <- data.matrix(train[,1:6])
+y_train <- data.matrix(train[,7])
+
+X_test <- data.matrix(test[,1:6])
+y_test <- data.matrix(test[,7])
+```
+
+```{r}
+# Ridge
+set.seed(42)
+cv.ridge <- cv.glmnet(X_train, y_train, family = 'gaussian', alpha = 0, type.measure = 'mse')
+best_lambda_ridge <- cv.ridge$lambda.min
+```
+
+```{r}
+# Lasso
+set.seed(42)
+cv.lasso <- cv.glmnet(X_train, y_train, family = 'gaussian', alpha = 1, type.measure = 'mse')
+best_lambda_lasso <- cv.lasso$lambda.min
+```
+
+```{r}
+plot(cv.ridge)
+plot(cv.lasso)
+```
+
+```{r}
+best_lambda_ridge
+best_lambda_lasso
+```
+
+```{r}
+min(cv.ridge$cvm)
+min(cv.lasso$cvm)
+```
+
+```{r}
+# confidence intervals for Ridge coefficients
+coef(cv.ridge, s=cv.ridge$lambda.min)
+```
+
+```{r}
+# confidence intervals for Lasso coefficients
+coef(cv.lasso, s=cv.lasso$lambda.min)
+```
+
+```{r}
+# Train Ridge model
+ridge_model <- glmnet(X_train, y_train, family = 'gaussian', alpha = 0, lambda = best_lambda_ridge)
+
+# Train Lasso model
+lasso_model <- glmnet(X_train, y_train, family = 'gaussian', alpha = 1, lambda = best_lambda_lasso)
+
+# Make predictions on the test set
+ridge_preds <- predict(ridge_model, newx = X_test)
+lasso_preds <- predict(lasso_model, newx = X_test)
+
+# Calculate the MSE on the test set
+ridge_mse <- mean((y_test - ridge_preds)^2)
+lasso_mse <- mean((y_test - lasso_preds)^2)
+
+# Print the MSE values
+ridge_mse
+lasso_mse
+```
+
+# el modelo Ridge funciona ligeramente mejor que el modelo Lasso, ya que tiene un valor de MSE más bajo. Sin embargo, es importante tener en cuenta que la diferencia de rendimiento entre los dos modelos es relativamente pequeña. Vamos a visualizarlo y estudiar los coefs.
+
+```{r}
+plot(y_test, ridge_preds, pch = 16, col = "blue", main = "Actual vs Predicted (Ridge)")
+abline(0, 1, col = "red")
+legend("topleft", legend = "Ridge", col = "blue", pch = 16)
+```
+
+```{r}
+plot(y_test, lasso_preds, pch = 16, col = "green", main = "Actual vs Predicted (Lasso)")
+abline(0, 1, col = "red")
+legend("topleft", legend = "Lasso", col = "green", pch = 16)
+```
+```{r}
+ridge_coefs <- coef(ridge_model)[-1]  # Excluir intercept
+ridge_variable_names <- names(ridge_coefs)
+print(ridge_coefs)
+```
+
+```{r}
+lasso_coefs <- coef(lasso_model)[-1]  # Excluir intercept
+lasso_variable_names <- names(lasso_coefs)
+print(lasso_coefs)
+```
+
+```{r}
+barplot(ridge_coefs, main = "Ridge Coefficients", xlab = "Variable", ylab = "Coefficient")
+abline(h = 0, col = "red")
+```
+
+```{r}
+barplot(lasso_coefs, main = "Lasso Coefficients", xlab = "Variable", ylab = "Coefficient")
+abline(h = 0, col = "red")
+```
+
+Ambos modelos indican que a medida que aumenta el valor de X, el salario tiende a aumentar.
+La variable rango tiene un coeficiente positivo en ambos modelos, lo que sugiere que los rangos más altos están asociados con salarios más altos.
+La variable disciplina también tiene coeficientes positivos en ambos modelos, lo que indica que ciertas disciplinas tienden a tener salarios más altos en comparación con otras.
+Las variables yrs.since.phd y yrs.service tienen coeficientes positivos y negativos, respectivamente, lo que sugiere que el número de años desde la obtención del doctorado afecta positivamente al salario, mientras que el número de años de servicio puede tener un impacto negativo.
+La variable sexo tiene un coeficiente negativo en ambos modelos, lo que indica que ser mujer (codificado como 1) está asociado con salarios más bajos en comparación con ser hombre (codificado como 0).
+
+# One Hot Encoding
+# dado el bajo numero de levels de "rank" y "discipline" -> son candidatos potenciales para el uso de one hot encoding
+# Me parece que los temas de la collinealidad y complejidad del modelo son los más importantes.
+# Si existe una alta correlación o colinealidad entre las variables codificadas, puede afectar la estabilidad y la interpretación del modelo.
+# Y si creamos 3 columnas nuevas de rank, 2 de sex y 2 de disciplina tendríamos que investigar para la colinealidad y el sobreajuste (de introducir muchas variables nuevas) resultando o en un modelo mejor o uno que requiera Principle Component Analysis (PCA) u otras técnicas
+# Creo que en este caso solamente la variable de "rank" debería ser one-hot encoded porque tiene 3 levels. "sex" y "discipline" ya son binarias y el modelo puede captar todo (o la mayoría) del impacto estadistico de las variables con 2 levels.
+
+```{r}
+# Será así pero no sé como continuar y si usar una variable de referencia..etc
+# Creo que en este caso podría ser util en lugar de "rank"
+
+data2 <- data
+data2$rankAssocProf <- ifelse(data$rank == "AssocProf", 1, 0)
+data2$rankAsstProf <- ifelse(data$rank == "AsstProf", 1, 0)
+data2$rankProf <- ifelse(data$rank == "Prof", 1, 0)
+
+data2$rank <- NULL
+head(data2)
+```
+
+4. Estudia la normalidad de los residuos del modelo resultante, ¿detectas algún sesgo?
+
+```{r}
+predictions <- predict(cv.ridge, newx = X_test)
+residuals <- y_test - predictions
+```
+
+```{r}
+# Plot a histogram of the residuals
+hist(residuals, breaks = "FD", main = "Histogram of Residuals", xlab = "Residuals")
+qqnorm(residuals)
+qqline(residuals)
+```
+
+```{r}
+shapiro.test(residuals)
+```
+# con base en la prueba de Shapiro-Wilk, podemos suponer que los residuos siguen aproximadamente una distribución normal
+
+```{r}
+skewness(residuals)
+kurtosis(residuals)
+```
+
+# los residuos muestran una ligera asimetría hacia la derecha y tienen una distribución que tiene menos picos y colas más claras en comparación con una distribución normal
+
+# Con base en la asimetría, la curtosis, la prueba de Shapiro-Wilk y la confirmación visual, no hay pruebas sólidas que sugieran la presencia de sesgo en los residuos.
+
+5. ¿Qué conclusiones extraes de este estudio y del modelo implementado? ¿Consideras correcto el rendimiento del mismo?
+
+Rendimiento del modelo: podemos decir que el modelo ha sido entrenado y probado, y los residuos siguen aproximadamente una distribución normal. El rendimiento del modelo debe evaluarse utilizando métricas apropiadas y compararse con otros modelos o puntos de referencia para evaluar su precisión o entrenado con una muestra más grande y/o representativa (count de Mujeres y Hombres por ejemplo).
+
+Importancia de las variables: Los valores de coeficiente más altos sugieren relaciones más fuertes con la variable objetivo pero la interpretación depende de la escala y la estandarización de las variables. Es un buen punto de donde partir y profundizar sobre ello en un estudio del salario de profesores.
+
+Es esencial evaluar la precisión del modelo utilizando las métricas adecuadas (ex: R^2, MSE..etc) y comparar su rendimiento con modelos alternativos o puntos de referencia para determinar si su rendimiento es satisfactorio.
+
+¡Mucho ánimo y espero que disfrutéis de esta práctica!
+
+
